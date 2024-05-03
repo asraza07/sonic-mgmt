@@ -33,6 +33,7 @@ REBOOT_TYPE_UNKNOWN = "Unknown"
 REBOOT_TYPE_THERMAL_OVERLOAD = "Thermal Overload"
 REBOOT_TYPE_BIOS = "bios"
 REBOOT_TYPE_ASIC = "asic"
+REBOOT_TYPE_KERNEL_PANIC = "Kernel Panic"
 
 # Event to signal DUT activeness
 DUT_ACTIVE = threading.Event()
@@ -108,6 +109,13 @@ reboot_ctrl_dict = {
         "timeout": 300,
         "wait": 120,
         "cause": "ASIC",
+        "test_reboot_cause_only": True
+    },
+    REBOOT_TYPE_KERNEL_PANIC: {
+        "command": 'nohup bash -c "sleep 5 && echo c > /proc/sysrq-trigger" &',
+        "timeout": 300,
+        "wait": 120,
+        "cause": "Kernel Panic",
         "test_reboot_cause_only": True
     }
 }
@@ -233,6 +241,10 @@ def reboot(duthost, localhost, reboot_type='cold', delay=10,
     except KeyError:
         raise ValueError('invalid reboot type: "{} for {}"'.format(reboot_type, hostname))
 
+    # Create a temporary file in tmpfs before reboot
+    logger.info('DUT {} create a file /dev/shm/test_reboot before rebooting'.format(hostname))
+    duthost.command('sudo touch /dev/shm/test_reboot')
+
     reboot_res, dut_datetime = perform_reboot(duthost, pool, reboot_command, reboot_helper, reboot_kwargs, reboot_type)
 
     wait_for_shutdown(duthost, localhost, delay, timeout, reboot_res)
@@ -268,6 +280,12 @@ def reboot(duthost, localhost, reboot_type='cold', delay=10,
         ret = wait_until(warmboot_finalizer_timeout, 5, 0, check_warmboot_finalizer_inactive, duthost)
         if not ret:
             raise Exception('warmboot-finalizer service timeout on DUT {}'.format(hostname))
+
+    # Verify if the temporary file created in tmpfs is deleted after reboot, to determine a
+    # successful reboot
+    file_check = duthost.stat(path="/dev/shm/test_reboot")
+    if file_check['stat']['exists']:
+        raise Exception('DUT {} did not reboot'.format(hostname))
 
     DUT_ACTIVE.set()
     logger.info('{} reboot finished on {}'.format(reboot_type, hostname))
